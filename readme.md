@@ -25,7 +25,7 @@ resources:
     iaas: {{IAAS}}
     api_token: {{PIVNET_TOKEN}} 
 ```
-`iaas:` Required. Primarily required for stemcell downloads as stemcells are IaaS specific. Should be on of `AWS`, `Azure/Google Cloud Platform`, `vSphere`, `vCloud` or `Openstack`. Currently supports only `vSphere` and `Openstack`  
+`iaas:` Required. Primarily required for stemcell downloads as stemcells are IaaS specific. Should be one of `AWS`, `Azure/Google Cloud Platform`, `vSphere`, `vCloud` or `Openstack`. Currently supports only `vSphere` and `Openstack`  
 `api_token:` Required. Your pivnet api token  
 
 Parameters for the the source:  
@@ -52,7 +52,7 @@ jobs:
         - product_slug: p-mysql
         product_versions:
         - product_version: "3263.13"
-        - product_version: "3263_14"
+        - product_version: "3263.14"
         - product_version: "1.8.23-build.2"
         - product_version: "1.7.9"
         - product_version: "1.8.0"
