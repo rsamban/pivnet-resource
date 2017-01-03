@@ -1,0 +1,170 @@
+#!/bin/bash
+
+set -e
+
+exec 3>&1 # use fd 3 for script output
+exec 1>&2 # send normal stdout to stderr for logging
+
+input=$(mktemp /tmp/resource-in.XXXXXX)
+cat > "${input}" <&0
+
+#test=$(<&0)
+#echo "test = $test"
+#echo "========================================="
+
+#echo '["version": "1.0.0"]'
+#echo '{"version":{"ref":"none"}}'
+
+
+iaas=$(cat $input | jq '.[] | select(.iaas != null) | .iaas ' | tr -d '"')
+pivnet_token=$(cat $input | jq '.[] | select(.api_token != null) | .api_token' | tr -d '"')
+product_slugs_string=$(cat $input | jq '.[] | select(.product_slugs != null) | .product_slugs[].product_slug' | tr -d '"')
+product_slugs=(${product_slugs_string// / })
+product_versions_string=$(cat $input | jq '.[] | select(.product_versions != null) | .product_versions[].product_version' | tr -d '"')
+product_versions=(${product_versions_string// / })
+
+
+
+# Inputs: pivnet_token, product_slug, product_version
+# 1. Get the list of products as json
+# 2. Query for product specified in product_slug
+# 3. Get all the releases for the product as json
+# 4. Get EULA link for product version specified in product_version
+# 5. Accept EULA
+# 6. Get product files link for version specified in product_version
+# 7. Get file name (name of the output file)
+# 8. Get the download link
+# 9. Download the product and save
+
+# Get all the products
+curl -s -H "Accept: application/json" -H "Content-Type: application/json" -H "Authorization: Token ${pivnet_token}" -X GET https://network.pivotal.io/api/v2/products | jq '.[]' > $1/products.json
+
+
+#for product_slug in $product_slugs;
+noOfProducts=${#product_slugs[@]}
+allProducts=true
+for ((i=0; i<noOfProducts; ++i));
+do
+    echo
+    echo "Processing product $(($i+1)) of $noOfProducts =============================================================================================="
+    product_slug=${product_slugs[$i]}
+    product_version=${product_versions[$i]}
+    echo "product_slug=${product_slugs[$i]}"
+    echo "product_version=${product_versions[$i]}"
+    product_version_no_build=$(echo $product_version | awk -F'-' '{print $1}')
+
+    # Get releases link
+    product_release_link[$i]=$(cat $1/products.json | jq --arg product "$product_slug" '.[] | select(.slug == $product) | ._links.releases.href' | tr -d '"')
+    echo "product release_link[$i]: ${product_release_link[$i]}"
+    # TODO: check of product release link is null
+    if [ -z $product_release_link[$i] ]; then
+        echo "ERROR: *********************** Cannot find any versions for product $product_slug"
+	allProducts=false
+    fi
+
+    # Get all the releases for product
+    curl -s -H "Accept: application/json" -H "Content-Type: application/json" -H "Authorization: Token ${pivnet_token}" -X GET ${product_release_link[$i]} | jq '.[]' > $1/$i-releases.json
+
+    # Accept EULA
+    eula_acceptance_url[$i]=$(cat $1/$i-releases.json | jq --arg version "$product_version_no_build" '.[] | select(.version == $version) | ._links.eula_acceptance.href' | tr -d '"')
+    echo "eula_acceptance_url[$i]: ${eula_acceptance_url[$i]}"
+    wget -O $1/$product_slug-$product_version-eula_acceptance --post-data="" --header="Authorization: Token ${pivnet_token}" ${eula_acceptance_url[$i]} 
+
+    # Get product files link
+    product_files_link[$i]=$(cat $1/$i-releases.json |jq --arg version "$product_version_no_build" '.[] | select(.version == $version) | ._links.product_files.href' | tr -d '"')
+    echo "product_files_link[$i]: ${product_files_link[$i]}"
+    if [ -z ${product_files_link[$i]} ]; then
+        echo "ERROR: *********************** Cannot find product $product_slug and version $product_version"
+	allProducts=false
+    fi
+
+    # Get product files
+    curl -s -H "Accept: application/json" -H "Content-Type: application/json" -H "Authorization: Token ${pivnet_token}" -X GET ${product_files_link[$i]} | jq '.[]' > $1/$i-product_files.json
+
+    # TODO: get md5
+    #self_link=$(cat $1/$i-product_files.json | 
+
+    # Get file name and download link
+    if [ "$product_slug" == "stemcells" ]; then # download stemcells
+	aws_object_key=$(cat $1/$i-product_files.json | jq --arg version "$product_version" --arg iaas "$iaas" '.[] | select(.file_version == $version) | select( .name | contains($iaas)) | .aws_object_key' | tr -d '"')
+	# select file that ends with tgz
+	#select file that ends with .pivotal
+	for temp in $aws_object_key; do
+	    if [[ $temp == *.tgz ]]; then
+	        product_file_name=$temp
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	    fi
+	done
+
+	#file_name=$1/$(echo $aws_object_key | awk -F'/' '{print $3}')
+	#file_name=$1/$iaas-$product_slug-$product_version.tgz
+        download_link=$(cat $1/$i-product_files.json | jq --arg version "$product_version" --arg iaas "$iaas" --arg aws_object_key "$product_file_name" '.[] | select(.file_version == $version and .aws_object_key == $aws_object_key) | select( .name | contains($iaas)) | ._links.download.href' | tr -d '"')
+    else
+	aws_object_key=$(cat $1/$i-product_files.json | jq --arg version "$product_version" '.[] | select(.file_version == $version) | .aws_object_key' | tr -d '"')
+	#select file that ends with .pivotal, .ova(for vSphere), .raw(for openstack), .yml (for public cloud providers - aws, azure, gcp, vCloud) 
+	for temp in $aws_object_key; do
+	    if [[ $temp == *.pivotal ]]; then
+	        product_file_name=$temp
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	    fi
+	    if [[ $iaas == "vSphere" && $temp == *.ova ]]; then
+	        product_file_name=$temp
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	    fi
+	    if [[ $iaas == "Openstack" && $temp == *.raw ]]; then
+	        product_file_name=$temp
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	    fi
+	    # TODO: handle public clouds
+	done
+
+	#file_name=$1/$(echo $aws_object_key | awk -F'/' '{print $3}')
+	#file_name=$1/$product_slug-$product_version.pivotal
+        download_link=$(cat $1/$i-product_files.json | jq --arg version "$product_version" --arg aws_object_key "$product_file_name" '.[] | select(.file_version == $version and .aws_object_key == $aws_object_key) | ._links.download.href' | tr -d '"')
+    fi
+    echo "file_name: $file_name"
+    echo "download_link: $download_link"
+    if [ -z $download_link ]; then
+        echo "ERROR: *********************** Cannot find download location for product $product_slug and version $product_version"
+	allProducts=false
+    fi
+    file_names[$i]=$file_name
+    download_links[$i]=$download_link
+
+    echo "Processing complete for product $(($i+1)) of $noOfProducts =============================================================================================="
+    echo
+done
+
+# Download all the products
+if [ allProducts==true ]; then
+    for ((i=0; i<${#download_links[@]}; ++i));
+    do
+        # Download the product
+	echo 
+        echo "================Downloading ${product_slugs[$i]} version ${product_versions[$i]} from ${download_links[$i]} ..."
+        wget --progress=bar:force -O "${file_names[$i]}" --post-data="" --header="Authorization: Token ${pivnet_token}" ${download_links[$i]}
+        echo "================Download completed for ${product_slugs[$i]} version ${product_versions[$i]} from ${download_links[$i]}"
+	echo 
+    
+        metadata[$i]="$(cat <<EOF	
+{
+    "pivnet-download": [
+        {
+            "product_slug": "${product_slugs[$i]}",
+            "product_version": "${product_versions[$i]}",
+            "product_release_link": "${product_release_link[$i]}",
+            "eula_acceptance_url": "${eula_acceptance_url[$i]}",
+            "product_files_link": "${product_files_link[$i]}",
+            "download_link": "${download_links[$i]}",
+            "file_name": "${file_names[$i]}",
+	    "file_size": "$(du -k ${file_names[$i]} | cut -f1)"
+        }
+         
+    ]
+}
+EOF
+)"
+    done
+fi
+
+echo "${metadata[0]} ${metadata[1]} ${metadata[2]}" | jq -s add >&3

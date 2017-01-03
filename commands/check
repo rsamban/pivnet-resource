@@ -1,0 +1,8 @@
+#!/bin/bash
+
+set -e
+payload=$(mktemp /tmp/resource-in.XXXXXX)
+cat > "${payload}" <&0
+
+echo '[{"version": "1.0"}]'
+#echo "[]"
