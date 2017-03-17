@@ -11,7 +11,6 @@ resource_types:
   type: docker-image
   source:
     repository: rsamban/pivnet
-    tag: "1.0"
     
 ```
 ## Source Configuration
