@@ -5,6 +5,8 @@ set -e
 exec 3>&1 # use fd 3 for script output
 exec 1>&2 # send normal stdout to stderr for logging
 
+PUBLIC_CLOUDS=(AWS GCP Azure)
+
 input=$(mktemp /tmp/resource-in.XXXXXX)
 cat > "${input}" <&0
 
@@ -17,7 +19,7 @@ cat > "${input}" <&0
 
 
 iaas=$(cat $input | jq '.[] | select(.iaas != null) | .iaas ' | tr -d '"')
-pivnet_token=$(cat $input | jq '.[] | select(.api_token != null) | .api_token' | tr -d '"')
+	pivnet_token=$(cat $input | jq '.[] | select(.api_token != null) | .api_token' | tr -d '"')
 product_slugs_string=$(cat $input | jq '.[] | select(.product_slugs != null) | .product_slugs[].product_slug' | tr -d '"')
 product_slugs=(${product_slugs_string// / })
 product_versions_string=$(cat $input | jq '.[] | select(.product_versions != null) | .product_versions[].product_version' | tr -d '"')
@@ -103,23 +105,24 @@ do
 	aws_object_key=$(cat $1/$i-product_files.json | jq --arg version "$product_version" '.[] | select(.file_version == $version) | .aws_object_key' | tr -d '"')
 	#select file that ends with .pivotal, .ova(for vSphere), .raw(for openstack), .yml (for public cloud providers - aws, azure, gcp, vCloud) 
 	for temp in $aws_object_key; do
+	    echo "tep = ....... $temp"
 	    if [[ $temp == *.pivotal ]]; then
 	        product_file_name=$temp
-	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $NF}')
 	    fi
 	    if [[ $iaas == "vSphere" && $temp == *.ova ]]; then
 	        product_file_name=$temp
-	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $NF}')
 	    fi
 	    if [[ $iaas == "Openstack" && $temp == *.raw ]]; then
 	        product_file_name=$temp
-	        file_name=$1/$(echo $temp | awk -F'/' '{print $3}')
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $NF}')
 	    fi
-	    # TODO: handle public clouds
+            if [[ $temp == *.yml && $(echo $temp | grep $iaas) ]]; then
+	        product_file_name=$temp
+	        file_name=$1/$(echo $temp | awk -F'/' '{print $NF}')
+            fi
 	done
-
-	#file_name=$1/$(echo $aws_object_key | awk -F'/' '{print $3}')
-	#file_name=$1/$product_slug-$product_version.pivotal
         download_link=$(cat $1/$i-product_files.json | jq --arg version "$product_version" --arg aws_object_key "$product_file_name" '.[] | select(.file_version == $version and .aws_object_key == $aws_object_key) | ._links.download.href' | tr -d '"')
     fi
     echo "file_name: $file_name"
