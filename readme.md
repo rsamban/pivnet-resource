@@ -10,7 +10,7 @@ resource_types:
 - name: mypivnet
   type: docker-image
   source:
-    repository: rsamban/pivnet
+    repository: ecsteam/pivnet-resource
     
 ```
 ## Source Configuration
